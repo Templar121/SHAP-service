@@ -9,8 +9,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import base64
 from io import BytesIO
+import uuid
+import os
 from fastapi.middleware.cors import CORSMiddleware
-
 
 app = FastAPI()
 
@@ -22,11 +23,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Constants ---
 label_mapping = {0: 'nv', 1: 'mel', 2: 'bkl', 3: 'bcc', 4: 'akiec', 5: 'vasc', 6: 'df'}
 class_names = [label_mapping[i] for i in sorted(label_mapping.keys())]
-
 MODEL_PATH = Path(__file__).parent / "model" / "best_model.keras"
+TEMP_DIR = Path(__file__).parent / "temp_uploads"
+TEMP_DIR.mkdir(exist_ok=True)
+
+# --- Load Model ---
 model = load_model(str(MODEL_PATH), compile=False)
+
+# --- Utility Functions ---
+def preprocess_image(image_path, target_size=(64, 64)):
+    img = Image.open(image_path).convert('RGB')
+    img = img.resize(target_size)
+    arr = np.asarray(img, dtype=np.float32)
+    return np.expand_dims(arr, axis=0)
 
 def preprocess_image_from_array(img_array):
     img = tf.image.resize(img_array, (64, 64)).numpy().astype(np.float32)
@@ -43,13 +55,16 @@ def fig_to_base64(fig) -> str:
 def health_check():
     return {"status": "API is healthy ✅"}
 
-
 @app.post("/explain")
 async def explain_with_shap(file: UploadFile = File(...)):
+    temp_path = TEMP_DIR / f"{uuid.uuid4().hex}_{file.filename}"
     try:
-        img = Image.open(file.file).convert('RGB').resize((64, 64))
-        arr = np.asarray(img, dtype=np.float32)
-        preds = model.predict(np.expand_dims(arr, 0), verbose=0)[0]
+        # Save uploaded file to temp directory
+        with open(temp_path, "wb") as f:
+            f.write(await file.read())
+
+        arr = np.squeeze(preprocess_image(temp_path))  # shape: (64, 64, 3)
+        preds = model.predict(preprocess_image(temp_path), verbose=0)[0]
 
         masker = shap.maskers.Image("inpaint_telea", arr.shape)
         def shap_predict(x):
@@ -72,5 +87,12 @@ async def explain_with_shap(file: UploadFile = File(...)):
             ax.axis('off')
 
         return {"shap_base64": fig_to_base64(fig)}
+
     except Exception as e:
         return {"error": str(e)}
+
+    finally:
+        try:
+            temp_path.unlink()  # Clean up temp file
+        except Exception:
+            pass
