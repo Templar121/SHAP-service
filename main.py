@@ -72,7 +72,7 @@ async def explain_with_shap(file: UploadFile = File(...)):
             return model.predict(batch, verbose=0)
 
         explainer = shap.Explainer(shap_predict, masker, output_names=class_names)
-        explanation = explainer(arr[np.newaxis, ...], max_evals=50)
+        explanation = explainer(arr[np.newaxis, ...], max_evals=20)
         shap_vals = explanation.values[0]
 
         top_cls = np.argsort(preds)[::-1][:2]
